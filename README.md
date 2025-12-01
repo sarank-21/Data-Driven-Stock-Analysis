@@ -3,12 +3,12 @@
 * A complete end-to-end stock analysis dashboard built using Streamlit, Pandas, MySQL, and Matplotlib.
 This tool helps you load raw YAML-based stock data, store it in a MySQL database, export per-stock CSV files, and analyse stocks using multiple analytics modules.
 
-🔥 Features
-✅ YAML → DataFrame Loader
+## 🔥 Features
+### ✅ YAML → DataFrame Loader
 
 Reads multiple monthly YAML files from folders and combines them into a single Pandas DataFrame.
 
-✅ MySQL Integration
+### ✅ MySQL Integration
 
 Create database (DATA)
 
