@@ -1,6 +1,6 @@
-📊 Data-Driven Stock Analysis (Streamlit + MySQL)
+# 📊 Data-Driven Stock Analysis (Streamlit + MySQL)
 
-A complete end-to-end stock analysis dashboard built using Streamlit, Pandas, MySQL, and Matplotlib.
+* A complete end-to-end stock analysis dashboard built using Streamlit, Pandas, MySQL, and Matplotlib.
 This tool helps you load raw YAML-based stock data, store it in a MySQL database, export per-stock CSV files, and analyse stocks using multiple analytics modules.
 
 🔥 Features
