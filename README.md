@@ -120,7 +120,7 @@ password="0007"
 
 💡 After launch, the sidebar shows 5 analysis tools.
 
-##📈 Pages Overview
+## 📈 Pages Overview
 ### 🔹 Home Page
 
 * Load YAML Data
