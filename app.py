@@ -25,8 +25,8 @@ if "page" not in st.session_state:
 # -----------------------------------------------------------
 # PATH CONFIG (edit these to match your environment)
 # -----------------------------------------------------------
-folder_path = r"D:\data_driven\data"
-sector_file = r"D:\data_driven\data\Sector_data - Sheet1.csv"
+folder_path = r"D:\PROJECT_2\Data-Driven-Stock-Analysis\data"
+sector_file = r"D:\PROJECT_2\Data-Driven-Stock-Analysis\Sector_data - Sheet1.csv"
 
 # months used when loading YAML
 month_name = [
