@@ -2,165 +2,235 @@ import os
 import glob
 import yaml
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import mysql.connector
 import streamlit as st
+from datetime import datetime
 
 # -----------------------------------------------------------
-# STREAMLIT PAGE CONFIG
+# STREAMLIT CONFIG
 # -----------------------------------------------------------
 st.set_page_config(
     page_title="Data-Driven Stock Analysis",
-    page_icon="🗂️",
+    page_icon="📊",
     layout="wide"
 )
 
 # -----------------------------------------------------------
-# INITIALIZE SESSION STATE
+# SESSION STATE
 # -----------------------------------------------------------
 if "page" not in st.session_state:
-    st.session_state.page = "home"   # default landing page
+    st.session_state.page = "home"
 
 # -----------------------------------------------------------
-# PATH CONFIG (edit these to match your environment)
+# PATH CONFIG
 # -----------------------------------------------------------
 folder_path = r"D:\PROJECTS\Project_2\Data-Driven-Stock-Analysis\data"
 sector_file = r"D:\PROJECTS\Project_2\Data-Driven-Stock-Analysis\Sector_data - Sheet1.csv"
 
-# months used when loading YAML
-month_name = [
-    "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03",
-    "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09",
+MONTHS = [
+    "2023-10", "2023-11", "2023-12",
+    "2024-01", "2024-02", "2024-03",
+    "2024-04", "2024-05", "2024-06",
+    "2024-07", "2024-08", "2024-09",
     "2024-10", "2024-11"
 ]
 
 # -----------------------------------------------------------
-# 1. LOAD YAML INTO DATAFRAME
-# -----------------------------------------------------------
-def loading_yaml():
-    records = []
-    for month in month_name:
-        folder = os.path.join(folder_path, month)
-        if not os.path.isdir(folder):
-            continue
-        yaml_files = glob.glob(os.path.join(folder, "*.yaml"))
-        for file_path in yaml_files:
-            with open(file_path, "r") as file:
-                data = yaml.safe_load(file)
-                if isinstance(data, dict):
-                    records.append(data)
-                elif isinstance(data, list):
-                    records.extend(data)
-    df = pd.DataFrame(records)
-    return df
-
-# -----------------------------------------------------------
-# 2. MYSQL FUNCTIONS
+# MYSQL CONNECTION
 # -----------------------------------------------------------
 def get_connection(database=None):
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="0007",
-        database=database
-    )
+    try:
+        return mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="0007",
+            database=database
+        )
+    except mysql.connector.Error as e:
+        st.error(f"MySQL Error: {e}")
+        return None
 
-def create_database():
+# -----------------------------------------------------------
+# DATABASE SETUP
+# -----------------------------------------------------------
+def setup_database():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("CREATE DATABASE IF NOT EXISTS DATA")
+    cursor.execute("CREATE DATABASE IF NOT EXISTS sector")
     cursor.close()
     conn.close()
 
-def create_table():
-    conn = get_connection(database="DATA")
+    conn = get_connection("sector")
     cursor = conn.cursor()
+
+    # MARKET TABLE
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS MARKET (
             Ticker VARCHAR(50),
-            close DECIMAL(15,6),
-            date DATETIME,
+            date DATE,
+            open DECIMAL(15,6),
             high DECIMAL(15,6),
             low DECIMAL(15,6),
-            month VARCHAR(10),
-            open DECIMAL(15,6),
-            volume BIGINT
+            close DECIMAL(15,6),
+            volume BIGINT,
+            month VARCHAR(10)
         )
     """)
+
+    # 1.VOLATILITY RESULTS TABLE
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS VOLATILITY_RESULTS (
+            Ticker VARCHAR(50),
+            Volatility DECIMAL(15,8)
+        )
+    """)
+
+    # 2.Cumulative_Return  TABLE
+    cursor.execute(""" CREATE TABLE IF NOT EXISTS Cumulative_Return (
+    Date DATE,
+    Close DECIMAL(10,2),
+    Ticker VARCHAR(50),
+    Start_Close DECIMAL(10,2),
+    Cumulative_Return DECIMAL(15,8),
+    Cumulative_Return_Percent DECIMAL(15,8)
+    )
+    """)
+
+    # 3.Sector-wise Performance  TABLE
+    cursor.execute(""" CREATE TABLE IF NOT EXISTS Sector_wise (
+                   Sector VARCHAR(50),
+                   Yearly_Return DECIMAL(15,8))
+                   """)
+
+    # 4.Stock Price Correlation TABLE
+    cursor.execute(""" CREATE TABLE IF NOT EXISTS Stock_Price_Correlation (
+                   stock_1 VARCHAR(20),
+                   stock_2 VARCHAR(20),
+                   correlation FLOAT)
+                   """)
+
+
+    #  5.Top 5 Gainers  (Month-wise) TABLE
+    cursor.execute(""" CREATE TABLE IF NOT EXISTS Top_Gainers (
+                   Ticker VARCHAR(50),
+                   Month VARCHAR(50),
+                   First DECIMAL(15,8),
+                   Last DECIMAL(15,8),
+                   Monthly_Return DECIMAL(15,8))
+                   """)
+
     conn.commit()
     cursor.close()
     conn.close()
+    st.success("✅ Database & tables ready")
 
-def insert_values(df):
-    """
-    Insert records from a dataframe into the MARKET table.
-    The df should include columns: Ticker, close, date, high, low, month, open, volume
-    """
-    if df is None or df.empty:
-        return 0
-    conn = get_connection(database="DATA")
+# -----------------------------------------------------------
+# LOAD YAML
+# -----------------------------------------------------------
+def load_yaml_data():
+    records = []
+    for month in MONTHS:
+        folder = os.path.join(folder_path, month)
+        if not os.path.exists(folder):
+            continue
+        for file in glob.glob(os.path.join(folder, "*.yaml")):
+            with open(file, "r") as f:
+                data = yaml.safe_load(f)
+                if isinstance(data, list):
+                    records.extend(data)
+                elif isinstance(data, dict):
+                    records.append(data)
+    return pd.DataFrame(records)
+
+# -----------------------------------------------------------
+# INSERT YAML INTO SQL
+# -----------------------------------------------------------
+def insert_into_db(df):
+    if df.empty:
+        st.warning("⚠️ No YAML data found")
+        return
+
+    conn = get_connection("sector")
     cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM MARKET")
+    if cursor.fetchone()[0] > 0:
+        st.info("ℹ️ YAML data already inserted")
+        cursor.close()
+        conn.close()
+        return
 
     query = """
-        INSERT INTO MARKET (Ticker, close, date, high, low, month, open, volume)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO MARKET
+        (Ticker, date, open, high, low, close, volume, month)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """
-    inserted = 0
+
     for _, row in df.iterrows():
-        # Ensure we provide values in the right order and types
-        vals = (
-            str(row.get("Ticker")) if pd.notna(row.get("Ticker")) else None,
-            float(row.get("close")) if pd.notna(row.get("close")) else None,
-            pd.to_datetime(row.get("date")).to_pydatetime() if pd.notna(row.get("date")) else None,
-            float(row.get("high")) if pd.notna(row.get("high")) else None,
-            float(row.get("low")) if pd.notna(row.get("low")) else None,
-            str(row.get("month")) if pd.notna(row.get("month")) else None,
-            float(row.get("open")) if pd.notna(row.get("open")) else None,
-            int(row.get("volume")) if pd.notna(row.get("volume")) else None
-        )
-        cursor.execute(query, vals)
-        inserted += 1
+        cursor.execute(query, (
+            row.get("Ticker"),
+            pd.to_datetime(row.get("date")).date(),
+            row.get("open"),
+            row.get("high"),
+            row.get("low"),
+            row.get("close"),
+            row.get("volume"),
+            row.get("month")
+        ))
 
     conn.commit()
     cursor.close()
     conn.close()
-    return inserted
+    st.success(f"✅ Inserted {len(df)} rows into MARKET")
 
 # -----------------------------------------------------------
-# 3. CSV EXPORT (from DB -> output_csv per ticker)
+# EXPORT CSV
 # -----------------------------------------------------------
-def csv_convert():
-    output_folder = os.path.join(folder_path, "output_csv")
-    os.makedirs(output_folder, exist_ok=True)
+def export_csv():
+    out_dir = os.path.join(folder_path, "output_csv")
+    os.makedirs(out_dir, exist_ok=True)
 
-    conn = get_connection(database="DATA")
+    conn = get_connection("sector")
     cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT Ticker FROM MARKET")
-    companies = [row[0] for row in cursor.fetchall()]
+    tickers = [t[0] for t in cursor.fetchall()]
 
-    for ticker in companies:
-        query = "SELECT Ticker, close, date, high, low, month, open, volume FROM MARKET WHERE Ticker = %s ORDER BY date"
-        cursor.execute(query, (ticker,))
-        rows = cursor.fetchall()
-        if not rows:
+    created = 0
+    for ticker in tickers:
+        path = os.path.join(out_dir, f"{ticker}.csv")
+        if os.path.exists(path):
             continue
 
+        cursor.execute("""
+            SELECT Ticker, date, open, high, low, close, volume
+            FROM MARKET WHERE Ticker=%s ORDER BY date
+        """, (ticker,))
+        rows = cursor.fetchall()
+
         df = pd.DataFrame(rows, columns=[
-            "Ticker", "close", "date", "high", "low", "month", "open", "volume"
+            "Ticker", "date", "open", "high", "low", "close", "volume"
         ])
-        out_path = os.path.join(output_folder, f"{ticker}.csv")
-        df.to_csv(out_path, index=False)
+        df.to_csv(path, index=False)
+        created += 1
 
     cursor.close()
     conn.close()
 
+    if created == 0:
+        st.info("ℹ️ CSV files already exist")
+    else:
+        st.success(f"✅ {created} CSV files created")
+
 # -----------------------------------------------------------
-# 1. Volatility Analysis Page
+# VOLATILITY + SQL UPLOAD
 # -----------------------------------------------------------
-def analyze_stock_volatility(folder_path):
+def calculate_and_store_volatility():
     output_folder = os.path.join(folder_path, "output_csv")
     all_files = glob.glob(os.path.join(output_folder, "*.csv"))
+    if not all_files:
+        st.warning("⚠️ No CSV files found")
+        return pd.DataFrame()
 
     list_val = []
     for filename in all_files:
@@ -195,7 +265,28 @@ def analyze_stock_volatility(folder_path):
 
     top10 = volatility.sort_values(by='Volatility', ascending=False).head(10)
 
-    return top10, combined_df
+    # -------- INSERT INTO SQL --------
+    conn = get_connection("sector")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM VOLATILITY_RESULTS")
+    if cursor.fetchone()[0] > 0:
+        st.info("ℹ️ Volatility results already stored in database")
+    else:
+        for _, row in top10.iterrows():
+            cursor.execute("""
+                INSERT INTO VOLATILITY_RESULTS
+                (Ticker, Volatility)
+                VALUES (%s,%s)
+            """, (row["Ticker"], row["Volatility"]))
+
+        conn.commit()
+        st.success("✅ Top 10 Volatile Stocks stored in SQL")
+
+    cursor.close()
+    conn.close()
+
+    return top10
 
 # -----------------------------------------------------------
 # 2. Cumulative Return Over Time Page
@@ -259,6 +350,27 @@ def cumulative_return_plot(folder_path):
     ax.grid(True)
     st.pyplot(fig)
 
+    # -------- INSERT INTO SQL --------
+    conn = get_connection("sector")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM Cumulative_Return")
+    if cursor.fetchone()[0] > 0:
+        st.info("ℹ️ Cumulative Return already stored in database")
+    else:
+        for _, row in top5_df.iterrows():
+            cursor.execute("""
+                INSERT INTO Cumulative_Return
+                (Date, Close, Ticker,Start_Close,Cumulative_Return,Cumulative_Return_Percent)
+                VALUES (%s,%s,%s,%s,%s,%s)
+            """, (row["Date"], row["Close"],row['Ticker'],row['Start_Close'],row['Cumulative_Return'],row['Cumulative_Return_Percent']))
+
+        conn.commit()
+        st.success("✅ Top 15 Cumulative Return stored in SQL")
+
+    cursor.close()
+    conn.close()
+    
     return top5_tickers, cum_df
 
 # -----------------------------------------------------------
@@ -312,8 +424,7 @@ def avg_year_returns(folder_path, sector_file):
     # compute first and last price for each ticker (across available range)
     first_last = combined_df.groupby('Ticker').agg(
         first_price=('close', 'first'),
-        last_price=('close', 'last')
-    ).reset_index()
+        last_price=('close', 'last')).reset_index()
 
     first_last['yearly_return'] = (first_last['last_price'] - first_last['first_price']) / first_last['first_price'] * 100
 
@@ -322,7 +433,12 @@ def avg_year_returns(folder_path, sector_file):
     # If some tickers have no sector, mark them
     merged['sector'] = merged['sector'].fillna("Unknown")
 
-    sector_perf = merged.groupby('sector')['yearly_return'].mean().sort_values(ascending=False)
+    sector_perf = (
+    merged.groupby('sector')['yearly_return']
+    .mean()
+    .reset_index()
+    .sort_values(by='yearly_return', ascending=False))
+
 
     st.subheader("🏆 Average Yearly Return by Sector")
     st.write(sector_perf)
@@ -335,6 +451,29 @@ def avg_year_returns(folder_path, sector_file):
     ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
     plt.tight_layout()
     st.pyplot(fig)
+    
+    # -------- INSERT INTO SQL --------
+
+    conn = get_connection("sector")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM Sector_wise")
+    if cursor.fetchone()[0] > 0:
+        st.info("ℹ️ Sector-wise Performance already stored in database")
+    else:
+        for _, row in sector_perf.iterrows():
+            cursor.execute("""
+                INSERT INTO Sector_wise
+                (Sector, Yearly_Return)
+                VALUES (%s,%s)
+            """, (row["sector"], row["yearly_return"]))
+
+        conn.commit()
+        st.success("✅ Average Yearly Return by Sector is stored in SQL")
+
+    cursor.close()
+    conn.close()
+
 
     # return the Series for programmatic use
     return sector_perf
@@ -355,33 +494,61 @@ def stock_correlation(folder_path):
         if 'date' not in df.columns or 'close' not in df.columns:
             continue
 
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date')
-        df = df.set_index('date')
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        df = df.sort_values('date').set_index('date')
+
         stock_dict[ticker] = pd.to_numeric(df['close'], errors='coerce')
 
     if not stock_dict:
         st.warning("No stock CSVs found for correlation.")
         return pd.DataFrame()
 
-    combined_df = pd.DataFrame(stock_dict)
-    corr_matrix = combined_df.corr()
+    price_df = pd.DataFrame(stock_dict)
 
-    st.subheader("🔍 STOCK PRICE CORRELATION MATRIX:")
-    st.write(corr_matrix)
+    # ✅ USE RETURNS
+    returns_df = price_df.pct_change().dropna()
+    corr_matrix = returns_df.corr()
+
+    # ---------------- DISPLAY ----------------
+    st.subheader("🔍 STOCK RETURN CORRELATION MATRIX")
+    st.dataframe(corr_matrix.round(3))
 
     fig, ax = plt.subplots(figsize=(12, 8))
-    cax = ax.matshow(corr_matrix, cmap="coolwarm", vmin=-1, vmax=1)
-    fig.colorbar(cax, ax=ax)
+    cax = ax.imshow(corr_matrix, vmin=-1, vmax=1)
+    fig.colorbar(cax)
+
     ax.set_xticks(range(len(corr_matrix.columns)))
+    ax.set_yticks(range(len(corr_matrix.columns)))
     ax.set_xticklabels(corr_matrix.columns, rotation=90)
-    ax.set_yticks(range(len(corr_matrix.index)))
-    ax.set_yticklabels(corr_matrix.index)
-    ax.set_title("Stock Price Correlation Heatmap")
+    ax.set_yticklabels(corr_matrix.columns)
+
     plt.tight_layout()
     st.pyplot(fig)
 
+    # ---------------- SQL INSERT ----------------
+    conn = get_connection("sector")
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM Stock_Price_Correlation")
+    conn.commit()
+
+    for i, stock1 in enumerate(corr_matrix.columns):
+        for j, stock2 in enumerate(corr_matrix.columns):
+            if j >= i:
+                cursor.execute("""
+                    INSERT INTO Stock_Price_Correlation
+                    (stock_1, stock_2, correlation)
+                    VALUES (%s, %s, %s)
+                """, (stock1, stock2, float(corr_matrix.iloc[i, j])))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    st.success("✅ Stock return correlation matrix stored in SQL")
+
     return corr_matrix
+
 
 # -----------------------------------------------------------
 # 5. Top 5 Gainers and Losers (Month-wise) Page
@@ -464,26 +631,54 @@ def monthly_gainers_losers(folder_path):
     plt.tight_layout()
     st.pyplot(fig)
 
+    # -------- INSERT INTO SQL --------
+
+    conn = get_connection("sector")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM Top_Gainers")
+    if cursor.fetchone()[0] > 0:
+        st.info("ℹ️ Top 5 Gainers already stored in database")
+    else:
+        for _, row in monthly.iterrows():
+            cursor.execute("""
+                INSERT INTO Top_Gainers
+                (Ticker, Month,First,Last,Monthly_Return)
+                VALUES (%s,%s,%s,%s,%s)
+            """, (row["Ticker"],row['Month'],row['first'],row['last'],row['Monthly_Return']))
+
+        conn.commit()
+        st.success("✅ Top 5 Gainers is stored in SQL")
+
+    cursor.close()
+    conn.close()
+
+
 
 # -----------------------------------------------------------
-# APP PAGES / NAVIGATION
+# UI PAGES
 # -----------------------------------------------------------
-def show_home():
-    st.title("📂 YAML Data Loader & Market Toolkit")
+def home():
+    st.title("📊 Data-Driven Stock Analysis")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Load YAML & Show Sample"):
-            df = loading_yaml()
-            st.success(f"Loaded {len(df)} records from YAML (sample shown)")
-            st.dataframe(df)
-            
+        st.subheader("DATA SETUP")
+        if st.button("🗄️ Setup Database"):
+            setup_database()
 
+        if st.button("📥 Load YAML & Insert"):
+            df = load_yaml_data()
+            insert_into_db(df)
+
+        if st.button("📁 Export CSV"):
+            export_csv()
+        
     with col2:
-
-        if st.button("1. Volatility Analysis"):
+        st.subheader("📈 VISUALIZATION")
+        if st.button("Volatility Analysis"):
             st.session_state.page = "volatility"
             st.rerun()
-
+        
         if st.button("2. Cumulative Return Over Time"):
             st.session_state.page = "cumulative"
             st.rerun()
@@ -504,23 +699,23 @@ def show_home():
 # 1. Volatility Analysis Page
 # -----------------------------------------------------------
 
-def show_volatility():
-    st.title("📈 Stock Volatility Analysis")
-    top10, combined = analyze_stock_volatility(folder_path)
-    if top10.empty:
-        st.info("No volatility data available. Ensure you exported CSVs into output_csv folder.")
-    else:
-        st.subheader("🔟 Top 10 Volatile Stocks")
-        st.dataframe(top10)
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.bar(top10['Ticker'], top10['Volatility'])
-        ax.set_title("Top 10 Most Volatile Stocks")
-        ax.set_xlabel("Ticker")
-        ax.set_ylabel("Volatility")
-        ax.set_xticklabels(top10['Ticker'], rotation=45)
-        ax.grid(axis='y', linestyle='--', alpha=0.4)
-        st.pyplot(fig)
-    if st.button("⬅ Go Back"):
+def volatility_page():
+    st.title("📈 Top 10 Volatile Stocks")
+
+    vol = calculate_and_store_volatility()
+    if vol.empty:
+        return
+
+    st.dataframe(vol)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(vol["Ticker"], vol["Volatility"])
+    ax.set_ylabel("Volatility")
+    ax.set_title("Top 10 Volatile Stocks")
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+
+    if st.button("⬅ Back"):
         st.session_state.page = "home"
         st.rerun()
 
@@ -550,6 +745,7 @@ def show_year_return():
         st.session_state.page = "home"
         st.rerun()
 
+
 # -----------------------------------------------------------
 # 4. Stock Price Correlation Page
 # -----------------------------------------------------------
@@ -574,11 +770,13 @@ def show_gainers_lose():
         st.session_state.page = "home"
         st.rerun()
 
-# Router
+# -----------------------------------------------------------
+# ROUTER
+# -----------------------------------------------------------
 if st.session_state.page == "home":
-    show_home()
+    home()
 elif st.session_state.page == "volatility":
-    show_volatility()
+    volatility_page()
 elif st.session_state.page == "cumulative":
     show_cumulative()
 elif st.session_state.page == "year_return":
